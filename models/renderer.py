@@ -2,10 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-import logging
-import mcubes
-from icecream import ic
-from models.mip_utils import sample_along_rays, integrated_pos_enc, resample_along_rays, cast_rays
+from models.mip_utils import cast_rays
 
 def sample_pdf(bins, weights, n_samples, det=False):
     # This implementation is from NeRF
@@ -79,10 +76,7 @@ class NeuSRenderer:
         grads = torch.zeros((N, 4), device=inputs.device)
         sdf_nn = torch.zeros((N, 257), device=inputs.device)
 
-        if self.reg_l2:
-            reg_l2 = torch.zeros((N, self.sdf_network.tensor4d.dims), device=inputs.device)
-        else:
-            reg_l2 = 0
+        reg_l2 = torch.zeros((N, self.sdf_network.tensor4d.dims), device=inputs.device)
         grads[:, 0] = 1
         sdf_nn[:, 0] = -10
 
@@ -100,13 +94,11 @@ class NeuSRenderer:
         mask_time_emb = time_emb[mask, :]
         mask_cov = cov[mask, :]
         
+        mask_cov = torch.zeros_like(mask_mean)
         if self.flow_network is not None:
             if fid != 0:
                 pred_flow = self.flow_network(mask_mean, mask_cov, fid, mask_time_emb, reg_l2=False)
                 mask_mean = mask_mean + pred_flow
-            mask_cov = torch.zeros_like(mask_mean)
-            # else:
-            #     print(fid)
 
         if (not only_sdf) and self.reg_l2:
             pred_sdf_nn, pred_reg_l2 = self.sdf_network(mask_mean, mask_cov, fid, mask_time_emb, reg_l2=True)

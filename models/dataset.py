@@ -4,7 +4,6 @@ import cv2 as cv
 import numpy as np
 import os
 from glob import glob
-from icecream import ic
 from scipy.spatial.transform import Rotation as Rot
 from scipy.spatial.transform import Slerp
 from tqdm import tqdm
@@ -48,6 +47,7 @@ class Dataset:
 
         self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
+        self.n_frames = conf.get_int('n_frames', default=128)
 
         camera_dict = np.load(os.path.join(self.data_dir, self.render_cameras_name))
         self.camera_dict = camera_dict
@@ -93,7 +93,7 @@ class Dataset:
         self.H, self.W = self.images.shape[1], self.images.shape[2]
         self.image_pixels = self.H * self.W
         self.fid_all = torch.stack(self.fid_list).to(self.device)
-        self.time_emb_list = self.fid_all / 64 - 0.95
+        self.time_emb_list = (self.fid_all / self.n_frames * 2) - 0.95
 
         object_bbox_min = np.array([-1.01, -1.01, -1.01, 1.0])
         object_bbox_max = np.array([ 1.01,  1.01,  1.01, 1.0])

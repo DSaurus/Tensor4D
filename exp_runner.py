@@ -4,12 +4,10 @@ import logging
 import argparse
 import numpy as np
 import cv2 as cv
-import trimesh
 import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 from shutil import copyfile
-from icecream import ic
 from tqdm import tqdm
 from pyhocon import ConfigFactory
 from models.dataset import Dataset
@@ -44,9 +42,9 @@ class Runner:
         self.save_freq = self.conf.get_int('train.save_freq')
         self.report_freq = self.conf.get_int('train.report_freq')
         self.val_freq = self.conf.get_int('train.val_freq')
-        self.val_mesh_freq = self.conf.get_int('train.val_mesh_freq')
         self.batch_size = self.conf.get_int('train.batch_size')
         self.fine_level_iter = self.conf.get_int('train.fine_level_iter')
+        self.downsample_iter = self.conf.get_int('train.downsample_iter')
         self.validate_resolution_level = self.conf.get_int('train.validate_resolution_level')
         self.learning_rate = self.conf.get_float('train.learning_rate')
         self.learning_rate_alpha = self.conf.get_float('train.learning_rate_alpha')
@@ -145,8 +143,7 @@ class Runner:
         loss_list = []
         
         image_perm = self.get_image_perm()
-        self.max_fid = self.dataset.n_images // self.g_nums
-        
+        self.tensor4d.feature_plane.downsample = True
         self.tensor4d.feature_plane.level = 1
         for iter_i in tqdm(range(res_step)):
    
@@ -164,6 +161,9 @@ class Runner:
             
             if self.iter_step > self.fine_level_iter:
                 self.tensor4d.feature_plane.level = 2
+            if self.iter_step > self.downsample_iter:
+                self.tensor4d.feature_plane.downsample = False
+            self.tensor4d.feature_plane.feature_downsample()
 
             rays_o, rays_d, true_rgb, mask, rays_r = data[:, :3], data[:, 3: 6], data[:, 6: 9], data[:, 9: 10], data[:, 10: 11]
             near, far = self.dataset.near_far_from_sphere(rays_o, rays_d)
@@ -242,8 +242,6 @@ class Runner:
             self.writer.add_scalar('Statistics/psnr', psnr, self.iter_step)
             
             if self.iter_step % self.report_freq == 0:
-                print(self.base_exp_dir)
-                print(self.max_fid, image_perm)
                 print('iter:{:8>d} loss = {} lr={}'.format(self.iter_step, loss, self.optimizer_net.param_groups[0]['lr']))
 
             if self.iter_step % self.save_freq == 0:
@@ -298,14 +296,17 @@ class Runner:
 
     def load_checkpoint(self, checkpoint_name):
         checkpoint = torch.load(os.path.join(self.base_exp_dir, 'checkpoints', checkpoint_name), map_location=self.device)
-        self.tensor4d.load_state_dict(checkpoint['tensor4d'], strict=False)
+        self.tensor4d.load_state_dict(checkpoint['tensor4d'])
         self.sdf_network.load_state_dict(checkpoint['sdf_network_fine'], strict=False)
         self.deviation_network.load_state_dict(checkpoint['variance_network_fine'])
-        self.color_network.load_state_dict(checkpoint['color_network_fine'], strict=False)
+        self.color_network.load_state_dict(checkpoint['color_network_fine'])
         self.optimizer_net.load_state_dict(checkpoint['optimizer_net'])
         self.optimizer_data.load_state_dict(checkpoint['optimizer_data'])
         self.iter_step = checkpoint['iter_step']
-        self.max_fid = checkpoint['max_fid']
+
+        if self.flow:
+            self.flow_network.load_state_dict(checkpoint['flow_network'], strict=False)
+            self.flow_tensor4d.load_state_dict(checkpoint['flow_tensor4d'], strict=False)
 
         logging.info('End')
 
@@ -317,9 +318,13 @@ class Runner:
             'optimizer_net': self.optimizer_net.state_dict(),
             'optimizer_data': self.optimizer_data.state_dict(),
             'tensor4d': self.tensor4d.state_dict(),
-            'iter_step': self.iter_step,
-            'max_fid': self.max_fid
+            'iter_step': self.iter_step
         }
+        if self.flow:
+            checkpoint.update({
+                'flow_network': self.flow_network.state_dict(),
+                'flow_tensor4d': self.flow_tensor4d.state_dict()
+            })
 
         os.makedirs(os.path.join(self.base_exp_dir, 'checkpoints'), exist_ok=True)
         torch.save(checkpoint, os.path.join(self.base_exp_dir, 'checkpoints', 'ckpt_{:0>6d}.pth'.format(self.iter_step)))
@@ -345,7 +350,6 @@ class Runner:
 
         out_rgb_fine = []
         out_normal_fine = []
-        out_grad_fine = []
 
         for rays_o_batch, rays_d_batch, rays_r_batch in zip(rays_o, rays_d, rays_r):
             near, far = self.dataset.near_far_from_sphere(rays_o_batch, rays_d_batch)
@@ -367,14 +371,11 @@ class Runner:
                 out_rgb_fine.append(render_out['color_fine'].detach().cpu().numpy())
             if feasible('gradients') and feasible('weights'):
                 n_samples = self.renderer.n_samples + self.renderer.n_importance
-                grads = render_out['gradients'] * render_out['weights'][:, :n_samples, None]
                 normals = render_out['gradients'] * render_out['weights'][:, :n_samples, None]
                 if feasible('inside_sphere'):
                     normals = normals * render_out['inside_sphere'][..., None]
                 normals = normals.sum(dim=1).detach().cpu().numpy()
-                grads = grads.sum(dim=1).detach().cpu().numpy()
                 out_normal_fine.append(normals)
-                out_grad_fine.append(grads)
             del render_out
 
         img_fine = None
@@ -388,10 +389,6 @@ class Runner:
             normal_img = (np.matmul(rot[None, :, :], normal_img[:, :, None])
                           .reshape([H, W, 3, -1]) * 128 + 128).clip(0, 255)
             
-            grad_img = np.concatenate(out_grad_fine, axis=0)
-            grad_img = (np.matmul(rot[None, :, :], grad_img[:, :, None])
-                          .reshape([H, W, 3, -1]) * 128 + 128).clip(0, 255)
-
         os.makedirs(os.path.join(self.base_exp_dir, 'validations_fine'), exist_ok=True)
         os.makedirs(os.path.join(self.base_exp_dir, 'normals'), exist_ok=True)
 
@@ -413,11 +410,7 @@ class Runner:
                                         'normals',
                                         '{:0>8d}_{}_{}.png'.format(self.iter_step, i, idx)),
                            normal_img[..., i])
-                cv.imwrite(os.path.join(self.base_exp_dir,
-                                        'normals',
-                                        '{:0>8d}_{}_{}_grad.png'.format(self.iter_step, i, idx)),
-                           grad_img[..., i])
-
+                
     def render_novel_image(self, idx_0, idx_1, ratio, resolution_level, fid, time_emb):
         """
         Interpolate view between two cameras.
@@ -460,20 +453,19 @@ class Runner:
         return img_fine, normal_img
 
 
-    def interpolate_view(self, img_idx_0, img_idx_1):
+    def interpolate_view(self, img_idx_0, img_idx_1, n_frames, reso_level):
         images = []
-        n_frames = 30
         video_dir = os.path.join(self.base_exp_dir, 'render')
         os.makedirs(video_dir, exist_ok=True)
         self.tensor4d.feature_plane.level = 2
-        self.tensor4d.conv_net.eval()
-        N = 50
+        N = self.dataset.n_images // self.g_nums
         for i in range(n_frames):
             fid = i % (2*N-2)
             if fid > (N-1):
                 fid = (2*N-2) - fid
             time_emb = self.dataset.time_emb_list[fid]
             if self.tensor4d.image_guide:
+                self.tensor4d.conv_net.eval()
                 conv_idx = fid * self.g_nums
                 self.tensor4d.set_images(self.dataset.images[conv_idx:conv_idx+self.g_nums].to(self.device), self.dataset.proj_all[conv_idx:conv_idx+self.g_nums].to(self.device))
             print(fid)
@@ -481,7 +473,7 @@ class Runner:
             image, normal = self.render_novel_image(img_idx_0,
                                                   img_idx_1,
                                                   i / n_frames,
-                          resolution_level=2, fid=fid, time_emb=time_emb)
+                          resolution_level=reso_level, fid=fid, time_emb=time_emb)
             # print(normal.shape)
             H, W, _ = image.shape
             normal = (np.matmul(rot[None, :, :], normal[:, :, None])
@@ -520,6 +512,11 @@ if __name__ == '__main__':
     parser.add_argument('--gpu', type=int, default=0)
     parser.add_argument('--case', type=str, default='')
 
+    # interpolation
+    parser.add_argument('--n_frames', type=int, default=30)
+    parser.add_argument('--inter_reso_level', type=int, default=2)
+    
+
     args = parser.parse_args()
 
     torch.cuda.set_device(args.gpu)
@@ -533,4 +530,4 @@ if __name__ == '__main__':
         _, img_idx_0, img_idx_1 = args.mode.split('_')
         img_idx_0 = int(img_idx_0)
         img_idx_1 = int(img_idx_1)
-        runner.interpolate_view(img_idx_0, img_idx_1)
+        runner.interpolate_view(img_idx_0, img_idx_1, args.n_frames, args.inter_reso_level)

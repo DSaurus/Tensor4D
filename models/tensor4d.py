@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
-from einops import rearrange
 from .embedder import get_embedder
 
 def grid_sample(image, optical):
@@ -85,6 +84,8 @@ class SpacePlane(nn.Module):
         self.space_planes1 = torch.nn.Parameter(torch.zeros(3, lr_resolution[1], lr_resolution[0], lr_resolution[0]))
         self.space_planes = [self.space_planes1]
         self.dims = lr_resolution[1]*3
+        self.lr_resolution = lr_resolution
+        self.hr_resolution = hr_resolution
 
         if len(hr_resolution) > 0: 
             self.space_planes2 = torch.nn.Parameter(torch.zeros(3, hr_resolution[1], hr_resolution[0], hr_resolution[0]))
@@ -92,6 +93,21 @@ class SpacePlane(nn.Module):
             self.dims += hr_resolution[1]*3
 
         self.level = 1
+        self.downsample = False
+    
+    def feature_downsample(self):
+        if self.downsample:
+            space_planes1  = F.interpolate(self.space_planes1, (64, 64), mode='area')
+            self.space_planes = [space_planes1]
+            
+            if self.level == 2 and len(self.hr_resolution) > 0:
+                space_planes2  = F.interpolate(self.space_planes2, (64, 64), mode='area')
+                self.space_planes.append(space_planes2)
+                
+        else:
+            self.space_planes = [self.space_planes1]
+            if len(self.hr_resolution) > 0: 
+                self.space_planes.append(self.space_planes2)
 
     def sample(self, samples, idx, t_emb):
         pts_feature = torch.zeros((1, self.dims // 3, samples.shape[1], samples.shape[2]), device=samples.device)
@@ -113,7 +129,8 @@ class TimeSpacePlane(nn.Module):
         self.space_planes = [self.space_planes1]
         self.time_space_planes = [self.time_space_planes1]
         self.dims = lr_resolution[2]*3
-
+        self.lr_resolution = lr_resolution
+        self.hr_resolution = hr_resolution
         if len(hr_resolution) > 0: 
             self.space_planes2 = torch.nn.Parameter(torch.zeros(3, hr_resolution[2], hr_resolution[0], hr_resolution[0]))
             self.time_space_planes2 = torch.nn.Parameter(torch.zeros(6, hr_resolution[2], hr_resolution[0], hr_resolution[1])) # x-axis time
@@ -122,6 +139,27 @@ class TimeSpacePlane(nn.Module):
             self.dims += hr_resolution[2]*3
 
         self.level = 1
+        self.downsample = False
+    
+    def feature_downsample(self):
+        if self.downsample:
+            space_planes1  = F.interpolate(self.space_planes1, (64, 64), mode='area')
+            time_space_planes1  = F.interpolate(self.time_space_planes1, (64, 64), mode='area')
+            self.space_planes = [space_planes1]
+            self.time_space_planes = [time_space_planes1]
+            
+            if self.level == 2 and len(self.hr_resolution) > 0:
+                space_planes2  = F.interpolate(self.space_planes2, (64, 64), mode='area')
+                time_space_planes2  = F.interpolate(self.time_space_planes2, (64, 64), mode='area')
+                self.space_planes.append(space_planes2)
+                self.time_space_planes.append(time_space_planes2)
+        else:
+            self.space_planes = [self.space_planes1]
+            self.time_space_planes = [self.time_space_planes1]
+            if len(self.hr_resolution) > 0: 
+                self.space_planes.append(self.space_planes2)
+                self.time_space_planes.append(self.time_space_planes2)
+
 
     def sample(self, samples, idx, t_emb):
         pts_feature = torch.zeros((1, self.dims, samples.shape[1], samples.shape[2]), device=samples.device)

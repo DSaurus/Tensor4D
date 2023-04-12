@@ -91,7 +91,9 @@ python exp_runner.py --case boxing_v12 --mode train --conf confs/t4d_boxing_img.
 
 Tensor4D with image guidance can achieve more efficient convergence within 5k iterations:
 
-![image](assets/img_guide_results.png)
+![image](assets/thumbsup.gif)
+![image](assets/dance.gif)
+![image](assets/lego.gif)
 
 ### Config documentation
 

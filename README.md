@@ -93,6 +93,9 @@ Tensor4D with image guidance can achieve more efficient convergence within 5k it
 
 ![image](assets/img_guide_results.png)
 
+### Config documentation
+
+We provide the [config documentation](CONFIG.md) to explain the parameters in Tensor4D. It is recommended to check out the documentation before training your own Tensor4D model.
 
 ## Tensor4D Dataset
 

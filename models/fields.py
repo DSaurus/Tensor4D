@@ -149,7 +149,7 @@ class RenderingNetwork(nn.Module):
     def forward(self, points, normals, view_dirs, feature_vectors):
         if self.embedview_fn is not None:
             view_dirs = self.embedview_fn(view_dirs)
-            
+
         rendering_input = NoOptionError
 
         if self.mode == 'idr':

@@ -49,6 +49,7 @@ class NeuSRenderer:
                  up_sample_steps,
                  perturb,
                  reg_l2=False,
+                 mip_render=False,
                  flow_network=None):
                  
         self.sdf_network = sdf_network
@@ -62,6 +63,7 @@ class NeuSRenderer:
         self.perturb = perturb
         self.reg_l2 = reg_l2
         self.flow_network = flow_network
+        self.mip_render = mip_render
 
     def mask_query_geometry(self, mean, cov, only_sdf=False):
         fid = self.fid
@@ -94,11 +96,13 @@ class NeuSRenderer:
         mask_time_emb = time_emb[mask, :]
         mask_cov = cov[mask, :]
         
-        mask_cov = torch.zeros_like(mask_mean)
         if self.flow_network is not None:
+            mask_cov = torch.zeros_like(mask_mean) # flow mode, disable mip_render
             if fid != 0:
                 pred_flow = self.flow_network(mask_mean, mask_cov, fid, mask_time_emb, reg_l2=False)
                 mask_mean = mask_mean + pred_flow
+        elif not self.mip_render:
+            mask_cov = torch.zeros_like(mask_mean)
 
         if (not only_sdf) and self.reg_l2:
             pred_sdf_nn, pred_reg_l2 = self.sdf_network(mask_mean, mask_cov, fid, mask_time_emb, reg_l2=True)

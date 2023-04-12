@@ -10,7 +10,9 @@
 This is the official implementation of Tensor4D: Efficient Neural 4D Decomposition for High-fidelity Dynamic Reconstruction and Rendering. Tensor4D can efficiently achieve high-fidelity dynamic reconstruction and rendering with only sparse views or monocular camera:
 
 
-![image](assets/results.png)
+![image](assets/thumbsup.gif)
+![image](assets/dance.gif)
+![image](assets/lego.gif)
 
 
 
@@ -91,9 +93,7 @@ python exp_runner.py --case boxing_v12 --mode train --conf confs/t4d_boxing_img.
 
 Tensor4D with image guidance can achieve more efficient convergence within 5k iterations:
 
-![image](assets/thumbsup.gif)
-![image](assets/dance.gif)
-![image](assets/lego.gif)
+![image](assets/img_guide_results.png)
 
 ### Config documentation
 

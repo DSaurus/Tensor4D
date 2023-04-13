@@ -463,16 +463,16 @@ class Runner:
             fid = i % (2*N-2)
             if fid > (N-1):
                 fid = (2*N-2) - fid
-            time_emb = self.dataset.time_emb_list[fid]
+            time_emb = self.dataset.time_emb_list[fid * self.g_nums]
             if self.tensor4d.image_guide:
                 self.tensor4d.conv_net.eval()
                 conv_idx = fid * self.g_nums
                 self.tensor4d.set_images(self.dataset.images[conv_idx:conv_idx+self.g_nums].to(self.device), self.dataset.proj_all[conv_idx:conv_idx+self.g_nums].to(self.device))
-            print(fid)
+            print('fid:', fid, 'time_emb:', time_emb)
             rot = np.linalg.inv(self.dataset.pose_all[0, :3, :3].detach().cpu().numpy())
             image, normal = self.render_novel_image(img_idx_0,
                                                   img_idx_1,
-                                                  i / n_frames,
+                                                  np.sin(((i / n_frames) - 0.5) * np.pi) * 0.5 + 0.5,
                           resolution_level=reso_level, fid=fid, time_emb=time_emb)
             # print(normal.shape)
             H, W, _ = image.shape

@@ -27,13 +27,13 @@ torch
 tensorboard
 shutil
 tqdm
-pyhocon
+pyhocon==0.3.57
 glob
 scipy
 einops
 ```
 
-We have tested Tensor4D with several PyTorch versions including 1.13 and 2.0. It is recommended to use PyTorch with these versions to ensure compatibility.
+We have tested Tensor4D with several PyTorch versions including 1.13 and 2.0. It is recommended to use PyTorch with these versions to ensure compatibility. In addition, we find that pyhocon==0.3.60 is not compatible with our project.
 
 ## Run the code on Tensor4D dataset
 

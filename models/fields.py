@@ -181,4 +181,4 @@ class SingleVarianceNetwork(nn.Module):
         self.register_parameter('variance', nn.Parameter(init_tensor))
 
     def forward(self, x):
-        return torch.ones([len(x), 1]) * torch.exp(self.variance[0] * 10.0)
+        return torch.ones([len(x), 1], device=x.device) * torch.exp(self.variance[0] * 10.0)

@@ -13,7 +13,7 @@ def sample_pdf(bins, weights, n_samples, det=False):
     # cdf = torch.cat([torch.zeros_like(cdf[..., :1]), cdf], -1)
     # Take uniform samples
     if det:
-        u = torch.linspace(0. + 0.5 / n_samples, 1. - 0.5 / n_samples, steps=n_samples)
+        u = torch.linspace(0. + 0.5 / n_samples, 1. - 0.5 / n_samples, steps=n_samples, device=cdf.device)
         u = u.expand(list(cdf.shape[:-1]) + [n_samples])
     else:
         u = torch.rand(list(cdf.shape[:-1]) + [n_samples])
@@ -173,7 +173,7 @@ class NeuSRenderer:
         # |     \/
         # |
         # ----------------------------------------------------------------------------------------------------------
-        prev_cos_val = torch.cat([torch.zeros([batch_size, 1]), cos_val[:, :-1]], dim=-1)
+        prev_cos_val = torch.cat([torch.zeros([batch_size, 1], device=sdf.device), cos_val[:, :-1]], dim=-1)
         cos_val = torch.stack([prev_cos_val, cos_val], dim=-1)
         cos_val, _ = torch.min(cos_val, dim=-1, keepdim=False)
         cos_val = cos_val.clip(-1e3, 0.0) * inside_sphere
@@ -184,17 +184,13 @@ class NeuSRenderer:
         prev_cdf = torch.sigmoid(prev_esti_sdf * inv_s)
         next_cdf = torch.sigmoid(next_esti_sdf * inv_s)
 
-        def sigma_f(sdf, inv_s):
-            sigmoid = torch.sigmoid(sdf * inv_s)
-            return  (4 * (1-sigmoid)*sigmoid)
-
         alpha = (prev_cdf - next_cdf + 1e-5) / (prev_cdf + 1e-5)
         alpha[~mid_mask] = 0
         alpha = alpha.clamp(0.0, 1.0)
         
-        alpha = torch.cat([alpha, torch.zeros([batch_size, 1])], dim=-1)
+        alpha = torch.cat([alpha, torch.zeros([batch_size, 1], device=alpha.device)], dim=-1)
         weights = alpha * torch.cumprod(
-            torch.cat([torch.ones([batch_size, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]
+            torch.cat([torch.ones([batch_size, 1], device=alpha.device), 1. - alpha + 1e-7], -1), -1)[:, :-1]
 
         z_samples = sample_pdf(z_vals, weights, n_importance, det=True).detach()
         return z_samples
@@ -232,7 +228,7 @@ class NeuSRenderer:
 
         # Section length
         dists = z_vals[..., 1:] - z_vals[..., :-1]
-        cat_dists = torch.cat([dists, torch.Tensor([sample_dist]).expand(dists[..., :1].shape)], -1)
+        cat_dists = torch.cat([dists, torch.Tensor([sample_dist]).to(dists.device).expand(dists[..., :1].shape)], -1)
         mid_z_vals = z_vals + cat_dists * 0.5
 
         cones = cast_rays(z_vals, rays_o, rays_d, rays_r, 'cone', diagonal=True)
@@ -247,7 +243,7 @@ class NeuSRenderer:
         gradients = gradients.squeeze()
         sampled_color = self.mask_query_color(cones[0].reshape(-1, 3), pts_mask, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
         
-        inv_s = self.deviation_network(torch.zeros([1, 3]))[:, :1].clip(1e-6, 1e6)           # Single parameter
+        inv_s = self.deviation_network(torch.zeros([1, 3], device=sdf.device))[:, :1].clip(1e-6, 1e6)           # Single parameter
         inv_s = inv_s.expand(batch_size * n_samples, 1)
 
         true_cos = (dirs * gradients).sum(-1, keepdim=True)
@@ -272,7 +268,7 @@ class NeuSRenderer:
         alpha[~pts_mask] = 0
         alpha = alpha.reshape(batch_size, n_samples).clip(0.0, 1.0)
        
-        weights = alpha * torch.cumprod(torch.cat([torch.ones([batch_size, 1]), 1. - alpha + 1e-7], -1), -1)[:, :-1]
+        weights = alpha * torch.cumprod(torch.cat([torch.ones([batch_size, 1], device=alpha.device), 1. - alpha + 1e-7], -1), -1)[:, :-1]
         weights_sum = weights.sum(dim=-1, keepdim=True)
         
         color = (sampled_color * weights[:, :, None]).sum(dim=1)
@@ -304,31 +300,19 @@ class NeuSRenderer:
 
         batch_size = len(rays_o)
         sample_dist = 2.0 / self.n_samples   # Assuming the region of interest is a unit sphere
-        z_vals = torch.linspace(0.0, 1.0, self.n_samples)
+        z_vals = torch.linspace(0.0, 1.0, self.n_samples, device=rays_o.device)
         z_vals = near + (far - near) * z_vals[None, :]
 
         z_vals_outside = None
-        if self.n_outside > 0:
-            z_vals_outside = torch.linspace(1e-3, 1.0 - 1.0 / (self.n_outside + 1.0), self.n_outside)
-
+        
         n_samples = self.n_samples
         perturb = self.perturb
 
         if perturb_overwrite >= 0:
             perturb = perturb_overwrite
         if perturb > 0:
-            t_rand = (torch.rand([batch_size, 1]) - 0.5)
+            t_rand = (torch.rand([batch_size, 1], device=z_vals.device) - 0.5)
             z_vals = z_vals + t_rand * 2.0 / self.n_samples
-
-            if self.n_outside > 0:
-                mids = .5 * (z_vals_outside[..., 1:] + z_vals_outside[..., :-1])
-                upper = torch.cat([mids, z_vals_outside[..., -1:]], -1)
-                lower = torch.cat([z_vals_outside[..., :1], mids], -1)
-                t_rand = torch.rand([batch_size, z_vals_outside.shape[-1]])
-                z_vals_outside = lower[None, :] + (upper - lower)[None, :] * t_rand
-
-        if self.n_outside > 0:
-            z_vals_outside = far / torch.flip(z_vals_outside, dims=[-1]) + 1.0 / self.n_samples
 
         background_alpha = None
         background_sampled_color = None

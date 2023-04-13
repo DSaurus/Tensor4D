@@ -47,6 +47,8 @@ class Dataset:
 
         self.camera_outside_sphere = conf.get_bool('camera_outside_sphere', default=True)
         self.scale_mat_scale = conf.get_float('scale_mat_scale', default=1.1)
+        self.near = conf.get_float('near', default=-1)
+        self.far = conf.get_float('far', default=-1)
         self.n_frames = conf.get_int('n_frames', default=128)
 
         camera_dict = np.load(os.path.join(self.data_dir, self.render_cameras_name))
@@ -109,8 +111,8 @@ class Dataset:
 
     def process_radius(self):
         for img_idx in tqdm(range(self.images.shape[0])):
-            tx = torch.linspace(0, self.W - 1, self.W)
-            ty = torch.linspace(0, self.H - 1, self.H)
+            tx = torch.linspace(0, self.W - 1, self.W, device=self.device)
+            ty = torch.linspace(0, self.H - 1, self.H, device=self.device)
             pixels_x, pixels_y = torch.meshgrid(tx, ty)
             p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1) # W, H, 3
             rays_v = torch.matmul(self.intrinsics_all_inv[img_idx, None, None, :3, :3], p[:, :, :, None]).squeeze()  # W, H, 3
@@ -120,15 +122,15 @@ class Dataset:
             # Cut the distance in half, and then round it out so that it's
             # halfway between inscribed by / circumscribed about the pixel.
             radii = dx[..., None] * 2 / np.sqrt(12)
-            self.radius[img_idx] = radii   # W H 3
+            self.radius[img_idx] = radii.detach().cpu()   # W H 3
 
     def gen_rays_at(self, img_idx, resolution_level=1):
         """
         Generate rays at world space from one camera.
         """
         l = resolution_level
-        tx = torch.linspace(0, self.W - 1, self.W // l)
-        ty = torch.linspace(0, self.H - 1, self.H // l)
+        tx = torch.linspace(0, self.W - 1, self.W // l, device=self.device)
+        ty = torch.linspace(0, self.H - 1, self.H // l, device=self.device)
         pixels_x, pixels_y = torch.meshgrid(tx, ty)
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1) # W, H, 3
         rays_v = torch.matmul(self.intrinsics_all_inv[img_idx, None, None, :3, :3], p[:, :, :, None]).squeeze()  # W, H, 3
@@ -151,17 +153,15 @@ class Dataset:
         error = error / np.sum(error)
         index = np.arange(0, self.W*self.H // 64)
         select_index = np.random.choice(index, size=[batch_size], p=error)
-        pixels_y = torch.Tensor(select_index // self.W) * 8
+        pixels_y = torch.LongTensor(select_index // (self.W // 8)) * 8
         pixels_y += torch.randint_like(pixels_y, 8)
-        pixels_x = torch.Tensor(select_index % self.W) * 8
+        pixels_x = torch.LongTensor(select_index % (self.W // 8)) * 8
         pixels_x += torch.randint_like(pixels_x, 8)
 
-        pixels_x = torch.randint(low=0, high=self.W, size=[batch_size])
-        pixels_y = torch.randint(low=0, high=self.H, size=[batch_size])
-        color = self.images[img_idx].cuda()[(pixels_y, pixels_x)]    # batch_size, 3
-        mask = self.masks[img_idx].cuda()[(pixels_y, pixels_x)]      # batch_size, 3
-        rays_r = self.radius[img_idx].cuda()[(pixels_x, pixels_y)]   # batch_size, 1
-        p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1).float()  # batch_size, 3
+        color = self.images[img_idx][(pixels_y, pixels_x)]    # batch_size, 3
+        mask = self.masks[img_idx][(pixels_y, pixels_x)]      # batch_size, 3
+        rays_r = self.radius[img_idx][(pixels_x, pixels_y)]   # batch_size, 1
+        p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1).float().to(self.device)  # batch_size, 3
         p = torch.matmul(self.intrinsics_all_inv[img_idx, None, :3, :3], p[:, :, None]).squeeze() # batch_size, 3
         rays_v = p / torch.linalg.norm(p, ord=2, dim=-1, keepdim=True)    # batch_size, 3
         rays_v = torch.matmul(self.pose_all[img_idx, None, :3, :3], rays_v[:, :, None]).squeeze()  # batch_size, 3
@@ -173,8 +173,8 @@ class Dataset:
         Interpolate pose between two cameras.
         """
         l = resolution_level
-        tx = torch.linspace(0, self.W - 1, self.W // l)
-        ty = torch.linspace(0, self.H - 1, self.H // l)
+        tx = torch.linspace(0, self.W - 1, self.W // l, device=self.device)
+        ty = torch.linspace(0, self.H - 1, self.H // l, device=self.device)
         pixels_x, pixels_y = torch.meshgrid(tx, ty)
         p = torch.stack([pixels_x, pixels_y, torch.ones_like(pixels_y)], dim=-1)  # W, H, 3
         rays_v = torch.matmul(self.intrinsics_all_inv[0, None, None, :3, :3], p[:, :, :, None]).squeeze()  # W, H, 3
@@ -205,6 +205,8 @@ class Dataset:
         return rays_o.transpose(0, 1), rays_v.transpose(0, 1), rays_r.transpose(0, 1)
 
     def near_far_from_sphere(self, rays_o, rays_d):
+        if self.near > 0:
+            return self.near, self.far
         a = torch.sum(rays_d**2, dim=-1, keepdim=True)
         b = 2.0 * torch.sum(rays_o * rays_d, dim=-1, keepdim=True)
         mid = 0.5 * (-b) / a
